@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gravidade</title>
+<style>
+  :root{
+    --bg:#0e0f13; --bg2:#15171d; --text:#e8e9ee; --muted:#8b8f9c; --accent:#5b8cff;
+    box-sizing:border-box;
+    padding-top:env(safe-area-inset-top,0px);
+    padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]){ --bg:#eef0f4; --bg2:#dfe2e8; --text:#1b1d22; --muted:#5b5f6a; --accent:#3a63e0; }
+  }
+  html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);}
+  canvas{display:block;width:100vw;height:100vh;touch-action:none;}
+  #hint{
+    position:fixed; left:0; right:0; top:env(safe-area-inset-top,0px);
+    text-align:center; color:var(--muted); font:13px/1.4 -apple-system,system-ui,sans-serif;
+    padding:14px 20px 0; pointer-events:none; transition:opacity .6s ease;
+  }
+  #enableBtn{
+    position:fixed; left:50%; bottom:calc(36px + env(safe-area-inset-bottom,0px));
+    transform:translateX(-50%);
+    background:var(--accent); color:#fff; border:none; border-radius:999px;
+    padding:14px 26px; font:15px/1 -apple-system,system-ui,sans-serif; font-weight:600;
+    box-shadow:0 6px 20px rgba(0,0,0,.35);
+  }
+  #enableBtn.hidden{display:none;}
+  #status{
+    position:fixed; left:0; right:0; bottom:calc(14px + env(safe-area-inset-bottom,0px));
+    text-align:center; color:var(--muted); font:12px/1.3 -apple-system,system-ui,sans-serif;
+    pointer-events:none; opacity:0; transition:opacity .6s ease;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">incline o celular · arraste e jogue as formas</div>
+<button id="enableBtn" class="hidden">Ativar sensor de movimento</button>
+<div id="status"></div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const hint = document.getElementById('hint');
+  const btn = document.getElementById('enableBtn');
+  const status = document.getElementById('status');
+  let W, H, DPR;
+
+  function resize(){
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const palette = ['#ffffff'];
+  const TYPES = ['circle','square','triangle'];
+  const N = 20;
+  let shapes = [];
+
+  function rand(a,b){ return a + Math.random()*(b-a); }
+
+  function makeShape(){
+    const size = rand(16,34);
+    const type = TYPES[Math.floor(Math.random()*TYPES.length)];
+    return {
+      type,
+      x: rand(size, W-size),
+      y: rand(-H, 0),
+      vx: rand(-40,40),
+      vy: 0,
+      size,
+      collR: type === 'square' ? size*1.42 : size, // raio real que cobre os cantos
+      rot: rand(0, Math.PI*2),
+      vrot: rand(-2,2),
+      color: palette[Math.floor(Math.random()*palette.length)],
+      dragging: false
+    };
+  }
+  for(let i=0;i<N;i++) shapes.push(makeShape());
+
+  // gravity vector, driven by device tilt (fallback: straight down)
+  let gravX = 0, gravY = 900;
+  const G_MAG = 900;
+  let sensorOK = false;
+
+  function handleOrientation(e){
+    if(e.beta === null || e.gamma === null) return;
+    let beta = Math.max(-90, Math.min(90, e.beta));
+    let gamma = Math.max(-90, Math.min(90, e.gamma));
+    gravX = (gamma/90) * G_MAG;
+    gravY = (beta/90) * G_MAG;
+    if(!sensorOK){ sensorOK = true; status.textContent = 'sensor ativo'; status.style.opacity = 0.5; setTimeout(()=>status.style.opacity=0,1500); }
+  }
+
+  function initMotion(){
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
+      btn.classList.remove('hidden');
+      btn.addEventListener('click', ()=>{
+        DeviceOrientationEvent.requestPermission().then(state=>{
+          if(state === 'granted'){
+            window.addEventListener('deviceorientation', handleOrientation);
+            window.addEventListener('deviceorientationabsolute', handleOrientation);
+          } else {
+            status.textContent = 'permissão negada — usando gravidade padrão';
+            status.style.opacity = 0.5;
+          }
+          btn.classList.add('hidden');
+        }).catch(()=>{ btn.classList.add('hidden'); });
+      });
+    } else if ('DeviceOrientationEvent' in window) {
+      window.addEventListener('deviceorientation', handleOrientation);
+      window.addEventListener('deviceorientationabsolute', handleOrientation);
+      setTimeout(()=>{
+        if(!sensorOK){ status.textContent = 'sem sinal do sensor — usando gravidade padrão'; status.style.opacity = 0.5; }
+      }, 2000);
+    } else {
+      status.textContent = 'sensor de movimento indisponível neste navegador';
+      status.style.opacity = 0.5;
+    }
+  }
+  initMotion();
+
+  setTimeout(()=>{ hint.style.opacity = 0; }, 3500);
+
+  // pointer drag / throw
+  let active = null;
+  let lastPos = null, lastT = 0;
+  let velSample = {vx:0, vy:0};
+
+  function topShapeAt(x,y){
+    for(let i=shapes.length-1;i>=0;i--){
+      const s = shapes[i];
+      const dx = x-s.x, dy = y-s.y;
+      if(dx*dx+dy*dy <= (s.size*1.15)*(s.size*1.15)) return s;
+    }
+    return null;
+  }
+
+  canvas.addEventListener('pointerdown', (e)=>{
+    const x = e.clientX, y = e.clientY;
+    const s = topShapeAt(x,y);
+    if(s){
+      active = s;
+      s.dragging = true;
+      s.vx = 0; s.vy = 0;
+      lastPos = {x,y}; lastT = performance.now();
+      velSample = {vx:0,vy:0};
+      canvas.setPointerCapture(e.pointerId);
+    }
+  });
+  canvas.addEventListener('pointermove', (e)=>{
+    if(!active) return;
+    const x = e.clientX, y = e.clientY;
+    const t = performance.now();
+    const dt = Math.max(1,(t-lastT))/1000;
+    velSample.vx = (x-lastPos.x)/dt;
+    velSample.vy = (y-lastPos.y)/dt;
+    active.x = x; active.y = y;
+    lastPos = {x,y}; lastT = t;
+  });
+  function release(e){
+    if(!active) return;
+    active.dragging = false;
+    active.vx = velSample.vx;
+    active.vy = velSample.vy;
+    active.vrot = (velSample.vx/200);
+    active = null;
+  }
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+
+  function drawShape(s){
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.rotate(s.rot);
+    ctx.fillStyle = s.color;
+    ctx.strokeStyle = '#0d1b4c';
+    ctx.lineWidth = 2.5;
+    const r = s.size;
+    if(s.type === 'circle'){
+      ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); ctx.fill(); ctx.stroke();
+    } else if(s.type === 'square'){
+      ctx.fillRect(-r,-r,r*2,r*2);
+      ctx.strokeRect(-r,-r,r*2,r*2);
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(0,-r);
+      ctx.lineTo(r*0.87, r*0.5);
+      ctx.lineTo(-r*0.87, r*0.5);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function resolveCollisions(){
+    for(let i=0;i<shapes.length;i++){
+      const a = shapes[i];
+      if(a.dragging) continue;
+      for(let j=i+1;j<shapes.length;j++){
+        const b = shapes[j];
+        if(b.dragging) continue;
+        const dx = b.x-a.x, dy = b.y-a.y;
+        const dist = Math.hypot(dx,dy) || 0.001;
+        const minDist = a.collR + b.collR;
+        if(dist < minDist){
+          const nx = dx/dist, ny = dy/dist;
+          const overlap = (minDist - dist) / 2;
+          a.x -= nx*overlap; a.y -= ny*overlap;
+          b.x += nx*overlap; b.y += ny*overlap;
+
+          const rvx = b.vx-a.vx, rvy = b.vy-a.vy;
+          const rel = rvx*nx + rvy*ny;
+          if(rel < 0){
+            const restitution = 0.6;
+            const impulse = -(1+restitution)*rel/2;
+            a.vx -= impulse*nx; a.vy -= impulse*ny;
+            b.vx += impulse*nx; b.vy += impulse*ny;
+          }
+        }
+      }
+    }
+  }
+
+  let prevT = performance.now();
+  function tick(now){
+    const dt = Math.min(0.033, (now-prevT)/1000);
+    prevT = now;
+
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0,0,W,H);
+
+    resolveCollisions();
+    resolveCollisions();
+
+    for(const s of shapes){
+      if(s.dragging){ drawShape(s); continue; }
+
+      s.vx += gravX * dt;
+      s.vy += gravY * dt;
+      // air drag
+      s.vx *= 0.999; s.vy *= 0.999;
+
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.rot += s.vrot * dt;
+      s.vrot *= 0.995;
+
+      const r = s.collR;
+      if(s.x < r){ s.x = r; s.vx = -s.vx*0.55; }
+      if(s.x > W-r){ s.x = W-r; s.vx = -s.vx*0.55; }
+      if(s.y < r){ s.y = r; s.vy = -s.vy*0.55; }
+      if(s.y > H-r){ s.y = H-r; s.vy = -s.vy*0.55; s.vx *= 0.92; }
+
+      drawShape(s);
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
