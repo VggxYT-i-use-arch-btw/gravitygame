@@ -61,23 +61,20 @@
   resize();
 
   const palette = ['#ffffff'];
-  const TYPES = ['circle','square','triangle'];
-  const N = 20;
+  const N = 60;
   let shapes = [];
 
   function rand(a,b){ return a + Math.random()*(b-a); }
 
   function makeShape(){
-    const size = rand(16,34);
-    const type = TYPES[Math.floor(Math.random()*TYPES.length)];
+    const size = rand(14,28);
     return {
-      type,
       x: rand(size, W-size),
       y: rand(-H, 0),
       vx: rand(-40,40),
       vy: 0,
       size,
-      collR: type === 'square' ? size*1.42 : size, // raio real que cobre os cantos
+      collR: size*1.42, // raio real que cobre os cantos
       rot: rand(0, Math.PI*2),
       vrot: rand(-2,2),
       color: palette[Math.floor(Math.random()*palette.length)],
@@ -87,8 +84,8 @@
   for(let i=0;i<N;i++) shapes.push(makeShape());
 
   // gravity vector, driven by device tilt (fallback: straight down)
-  let gravX = 0, gravY = 900;
-  const G_MAG = 900;
+  const G_MAG = 2200;
+  let gravX = 0, gravY = G_MAG;
   let sensorOK = false;
 
   function handleOrientation(e){
@@ -190,6 +187,7 @@
     velSample.vx = (x-lastPos.x)/dt;
     velSample.vy = (y-lastPos.y)/dt;
     active.x = x; active.y = y;
+    active.vx = velSample.vx; active.vy = velSample.vy;
     lastPos = {x,y}; lastT = t;
   });
   function release(e){
@@ -211,44 +209,50 @@
     ctx.strokeStyle = '#0d1b4c';
     ctx.lineWidth = 2.5;
     const r = s.size;
-    if(s.type === 'circle'){
-      ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); ctx.fill(); ctx.stroke();
-    } else if(s.type === 'square'){
-      ctx.fillRect(-r,-r,r*2,r*2);
-      ctx.strokeRect(-r,-r,r*2,r*2);
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(0,-r);
-      ctx.lineTo(r*0.87, r*0.5);
-      ctx.lineTo(-r*0.87, r*0.5);
-      ctx.closePath(); ctx.fill(); ctx.stroke();
-    }
+    ctx.beginPath();
+    if(ctx.roundRect){ ctx.roundRect(-r,-r,r*2,r*2, r*0.28); }
+    else { ctx.rect(-r,-r,r*2,r*2); }
+    ctx.fill(); ctx.stroke();
     ctx.restore();
   }
 
   function resolveCollisions(){
     for(let i=0;i<shapes.length;i++){
       const a = shapes[i];
-      if(a.dragging) continue;
       for(let j=i+1;j<shapes.length;j++){
         const b = shapes[j];
-        if(b.dragging) continue;
+        if(a.dragging && b.dragging) continue;
         const dx = b.x-a.x, dy = b.y-a.y;
         const dist = Math.hypot(dx,dy) || 0.001;
         const minDist = a.collR + b.collR;
         if(dist < minDist){
           const nx = dx/dist, ny = dy/dist;
-          const overlap = (minDist - dist) / 2;
-          a.x -= nx*overlap; a.y -= ny*overlap;
-          b.x += nx*overlap; b.y += ny*overlap;
+          const overlap = minDist - dist;
+
+          if(a.dragging){
+            b.x += nx*overlap; b.y += ny*overlap;
+          } else if(b.dragging){
+            a.x -= nx*overlap; a.y -= ny*overlap;
+          } else {
+            a.x -= nx*overlap/2; a.y -= ny*overlap/2;
+            b.x += nx*overlap/2; b.y += ny*overlap/2;
+          }
 
           const rvx = b.vx-a.vx, rvy = b.vy-a.vy;
           const rel = rvx*nx + rvy*ny;
           if(rel < 0){
             const restitution = 0.6;
-            const impulse = -(1+restitution)*rel/2;
-            a.vx -= impulse*nx; a.vy -= impulse*ny;
-            b.vx += impulse*nx; b.vy += impulse*ny;
+            if(a.dragging){
+              const impulse = -(1+restitution)*rel;
+              b.vx += impulse*nx; b.vy += impulse*ny;
+            } else if(b.dragging){
+              const impulse = -(1+restitution)*rel;
+              a.vx -= impulse*nx; a.vy -= impulse*ny;
+            } else {
+              const impulse = -(1+restitution)*rel/2;
+              a.vx -= impulse*nx; a.vy -= impulse*ny;
+              b.vx += impulse*nx; b.vy += impulse*ny;
+            }
           }
         }
       }
@@ -281,7 +285,7 @@
       s.vrot *= 0.995;
 
       const speed = Math.hypot(s.vx, s.vy);
-      const maxSpeed = 1400;
+      const maxSpeed = 2600;
       if(speed > maxSpeed){ s.vx = s.vx/speed*maxSpeed; s.vy = s.vy/speed*maxSpeed; }
 
       const r = s.collR;
